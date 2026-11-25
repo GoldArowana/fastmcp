@@ -1,0 +1,60 @@
+name: Codex FastMCP 6467 validation
+on:
+  push:
+    branches:
+      - codex-validation/fastmcp-6467-c3d9faac
+permissions:
+  contents: read
+jobs:
+  projection:
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    env:
+      PR_HEAD: f7cd4da87b16a73e591c99c67386643f1cb0a5e2
+      UPSTREAM_BASE: ef1cc6f5f422b5d3e2809fbb1a5e21436c3868a4
+      PROJECTED_TREE: 59f222ee296a9f51247f86e35abe99baa8b05982
+      GIT_TERMINAL_PROMPT: '0'
+    steps:
+      - name: Read the published fork source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: GoldArowana/fastmcp
+          ref: f7cd4da87b16a73e591c99c67386643f1cb0a5e2
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Construct and verify the source projection
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PR_HEAD"
+          test "$(git remote get-url origin)" = https://github.com/GoldArowana/fastmcp
+          git fetch --no-tags https://github.com/PrefectHQ/fastmcp.git "$UPSTREAM_BASE"
+          test "$(git rev-parse FETCH_HEAD)" = "$UPSTREAM_BASE"
+          git -c user.name='OpenAI Codex CI' -c user.email=codex@localhost merge --no-commit --no-ff "$UPSTREAM_BASE"
+          test "$(git rev-parse MERGE_HEAD)" = "$UPSTREAM_BASE"
+          test "$(git write-tree)" = "$PROJECTED_TREE"
+          git diff --cached --check "$UPSTREAM_BASE"
+          test "$(git diff --cached --name-only "$UPSTREAM_BASE")" = "$(printf '%s\n' fastmcp_tasks/fastmcp_tasks/client.py tests/tasks/client/test_client_tool_tasks.py)"
+          printf 'workflow=%s\nsource=%s\nbase=%s\ntree=%s\n' "$GITHUB_SHA" "$PR_HEAD" "$UPSTREAM_BASE" "$PROJECTED_TREE"
+      - name: Setup locked Python dependencies
+        uses: ./.github/actions/setup-uv
+        with:
+          python-version: '3.12'
+          resolution: locked
+      - name: Check targeted tests
+        run: uv run --locked --no-sync pytest -n 0 tests/tasks/client tests/client/test_versioned_call_tool_validation.py
+      - name: Setup gitleaks
+        uses: ./.github/actions/setup-gitleaks
+      - name: Check static preflight
+        run: uv run --locked --no-sync prek run --files fastmcp_tasks/fastmcp_tasks/client.py tests/tasks/client/test_client_tool_tasks.py
+      - name: Verify the tested tree and tracked bytes
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PR_HEAD"
+          test "$(git rev-parse MERGE_HEAD)" = "$UPSTREAM_BASE"
+          test "$(git write-tree)" = "$PROJECTED_TREE"
+          git diff --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          printf 'verified source=%s base=%s tree=%s\n' "$PR_HEAD" "$UPSTREAM_BASE" "$PROJECTED_TREE"
